@@ -335,8 +335,9 @@ class ConcatenatedDataFrames(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X=None):
+        print("Concatenar")
         start_time = time.time()
-        X = pd.concat([self.df1, self.df2], axis=self.axis)
+        X = pd.concat([self.df1, self.df2], axis=self.axis, ignore_index=True)
         print(f"Tiempo de ejecucion ConcatenatedDataFrames {time.time() - start_time}")
         return X
 
@@ -568,14 +569,26 @@ class VerificarPeriodoRenovacion(BaseEstimator, TransformerMixin):
         X['fecha_ini_tram_reno'] = X[self.column_date_init].copy()
         X['fecha_ini_tram_reno'] = X.groupby(self.column_key)['fecha_ini_tram_reno'].shift(-1)
 
+        # Fecha de cducidad de la firma previa
+        X['fecha_caducidad_previa'] = X[self.column_date_expiration].copy()
+        X['fecha_caducidad_previa'] = X.groupby(self.column_key)['fecha_caducidad_previa'].shift(1)
+        X['fecha_caducidad_previa'] = pd.to_datetime(X['fecha_caducidad_previa'])
+
+        # Identificar Tipo de atencion de la renovacion
         X['atention_reno'] = X['atencion'].copy()
         X['atention_reno'] = X.groupby(self.column_key)['atention_reno'].shift(-1)
+
+        # Identificar la Vigencia de la renovacion
+        X['vigencia_reno'] = X['vigencia'].copy()
+        X['vigencia_reno'] = X.groupby(self.column_key)['vigencia_reno'].shift(-1)
+
         # Calcular la diferencia en días
         X['diferencia_dias'] = (X['fecha_ini_tram_reno'] - X['fecha_caducidad']).dt.days
 
         #vigencia_anios = ['1', '2', '3', '4', '5', '6']
         # Indicar las condiciones de renovacion y los plazos
         conditions = [
+            (X["fecha_ini_tram_reno"] < X[self.column_date_expiration] - timedelta(days=90)),
             (X['fecha_ini_tram_reno'] < X[self.column_date_expiration]),
             (X['fecha_ini_tram_reno'] <= X[self.column_date_expiration] + timedelta(days=30)),
             ((X[self.add_column] == 'No Renovado') & (X['max_fecha_caducidad'] > X['fecha_caducidad'])),
@@ -584,13 +597,30 @@ class VerificarPeriodoRenovacion(BaseEstimator, TransformerMixin):
         ]
 
         choices = [
-            'Ren. Anticipada',
-            'Ren. Plazo 30 dias',
-            'No Renovada Con Firma Vigente',
-            'Ren. Fuera Periodo'
+            'Duplica Su Firma Vigente',
+            'Firma Ren. Anticipada 90 dias',
+            'Firma Ren. Plazo 30 dias',
+            'Firma No Renovada, Tiene Firma Vigente',
+            'Firma Ren. Fuera Periodo'
         ]
+        X['Estado Firma Caducada'] = np.select(conditions, choices, default='Firma No Renovada')
+        X['Mom. de renovacion'] = X.groupby(self.column_key)['Estado Firma Caducada'].shift(1)
 
-        X['Momento  de la Renovacion'] = np.select(conditions, choices, default='No Renueva')
+        X['Mes de Renovacion'] = 'Mes de Renovacion'
+        # Suponiendo que 'X' es un DataFrame y 'self.column_date_expiration' es el nombre de la columna con fechas
+        condition_mes_reno = [
+            (X['fecha_ini_tram_reno'].isna()),
+            ((X['fecha_ini_tram_reno'].dt.month == X[self.column_date_expiration].dt.month) & (X['fecha_ini_tram_reno'].dt.year == X[self.column_date_expiration].dt.year)),
+            ((X['fecha_ini_tram_reno'].dt.month != X[self.column_date_expiration].dt.month) | (X['fecha_ini_tram_reno'].dt.year != X[self.column_date_expiration].dt.year))
+        ]
+        choices_mes_reno = [
+            'No Renueva',
+            'Renovo dentro del mismo Mes',
+            'Mes de Renovacion'
+        ]
+        X['Mes de Renovacion'] = np.select(condition_mes_reno, choices_mes_reno, default='')
+        X['Mes de Renovacion'] = X.groupby(self.column_key)['Mes de Renovacion'].shift(1)
+        #X.loc[(X['Mes de Renovacion'].isna() & X['producto'] == 'Renovación'), 'Mes de Renovacion'] = 'Mes de Renovacion'
 
         print(f"Tiempo de ejecucion VerificarPeriodoRenovacion {time.time() - start_time}")
 
@@ -622,21 +652,69 @@ class LimpiezaCorreosPref(BaseEstimator, TransformerMixin):
     :return: Dataframe with the emails cleaned.
     """
 
-    def __init__(self, column):
+    def __init__(self, column, column_key):
         self.column = column
+        self.column_key = column_key
 
     def fit(self, X, y=None):
         return self
 
     def transform(self, X=None):
         start_time = time.time()
+        #X['origen_proceso'] = 'Security Data'
         # Lista de los correos de los preferenciales
         df_correos_pref = pd.read_excel(
-            r'E:\Inteligencia de Negocios\13. Renovaciones\INFO PREFERENCIALES',
+            r'E:\Inteligencia de Negocios\13. Renovaciones\INFO PREFERENCIALES.xlsx',
             sheet_name='Hoja1'
         )
         df_correos_pref['CORREOS CLIENTES '].str.strip()
         set_correos_pref = set(df_correos_pref['CORREOS CLIENTES '])
-        X = X[~X[self.column].isin(set_correos_pref)].reset_index(drop=True)
+        #X.loc[X[self.column].isin(set_correos_pref), 'origen_proceso'] = 'Preferenciales'
+        #X = X[~X[self.column].isin(set_correos_pref)].reset_index(drop=True)
+
+        # Paso 2: Definir las condiciones
+        condition_preferenciales = X[self.column].isin(set_correos_pref)
+        condition_nulos = X['MEMBER_of_operador'].isna()
+        condition_terceros = ~X['MEMBER_of_operador'].str.contains('OPE_SECDATA|OPE_SD', na=False)
+        # Paso 3: Definir las opciones
+        choices = [
+            'Preferenciales',  # Para la primera condición
+            'Security Data',
+            'Terceros'  # Para la segunda condición
+        ]
+
+        # Paso 4: Usar np.select para asignar los valores según las condiciones
+        X['origen_proceso'] = np.select(
+            [condition_preferenciales, condition_nulos, condition_terceros],  # Lista de condiciones
+            choices,  # Lista de valores correspondientes
+            default='Security Data'  # Valor por defecto si ninguna condición es True
+        )
+
+        # Identificar la el origen  de la renovacion
+        X['origen_proceso_reno'] = X['origen_proceso'].copy()
+        X['origen_proceso_reno'] = X.groupby(self.column_key)['origen_proceso_reno'].shift(-1)
+
         print(f"Tiempo de ejecucion LimpiezaCorreosPref {time.time() - start_time}")
+        return X
+
+
+class ChangeDateInitTramFact(BaseEstimator, TransformerMixin):
+    """
+    Transform the type of a list column to datetime.
+    :param X: Dataframe to be used to transform the type.
+    :param column_list: List of Column to be transformed.
+    """
+
+    def __init__(self, column_date_init, column_date_fact):
+        self.column_date_init = column_date_init
+        self.column_date_fact = column_date_fact
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X=None):
+        print("Test")
+        start_time = time.time()
+        X[self.column_date_init] = X[self.column_date_fact].fillna(X[self.column_date_init])
+        print(f"Tiempo de ejecucion ChangeDateInitTramFact {time.time() - start_time}")
         return X
