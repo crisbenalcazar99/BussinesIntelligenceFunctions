@@ -1,3 +1,5 @@
+import os
+
 import GeneralFunctions.FunctionGeneralPurpose as fgp
 import GeneralFunctions.DataBaseManagement as dbm
 import GeneralFunctions.DataBaseManagementSQL as dbmMySQL
@@ -22,7 +24,9 @@ def FirmasCamunda():
 
     # Create a pipeline
     firmas_camunda_pipeline = Pipeline([
-        ('extract_data', dbm.DataExtractor(database='CAMUNDA', query_path=query_path)),
+        #('extract_data', dbm.DataExtractor(database='CAMUNDA', query_path=query_path)),
+        ('Cargar el CSV', fgp.CSVLoaderTransformer(
+            r'C:\Users\cbenalcazar\PycharmProjects\BussinesIntelligenceFunctions\DatabasesConsultas\FirmasCamunda.csv')),
         ('Convertir ID a Object', fgp.DTypeObject(column=['id_tramite'])),
         ('delete_duplicates', fgp.DeleteDuplicateEntries(column='id_tramite')),
         ('Filtrar_Suspendidas_Revocadas', fgp.FilterPerNotListMatchs(match_column='estado_firma', match_list=['Revocado', 'Suspendido'])),
@@ -49,7 +53,8 @@ def Firmas_Portal():
 
     # Create a pipeline
     firmas_portal_pipeline = Pipeline([
-        ('extract_data', dbmMySQL.DataExtractor(database='Portal', query_path=query_path)),
+        #('extract_data', dbmMySQL.DataExtractor(database='Portal', query_path=query_path)),
+        ('Cargar el CSV', fgp.CSVLoaderTransformer(r'C:\Users\cbenalcazar\PycharmProjects\BussinesIntelligenceFunctions\DatabasesConsultas\FirmasPortal.csv')),
         ('Filter_Per_Date', fgp.FilterPerDate(date_column='fecha_caducidad', start_date='2021-01-01')),
         ('Replace_values_Renovacion', fgp.ReplaceValues('producto', ['No', 'Si'], ['Emisión', 'Renovación'])),
         ('Replace_values_estado', fgp.ReplaceValues('estado_firma', [5, 1], ['Aprobado', 'Emitido'])),
@@ -95,7 +100,8 @@ def Firmas_Tokens():
 
     # Create a pipeline
     firmas_portal_pipeline = Pipeline([
-        ('extract_data', dbmMySQL.DataExtractor(database='Portal', query_path=query_path)),
+        #('extract_data', dbmMySQL.DataExtractor(database='Portal', query_path=query_path)),
+        ('Cargar el CSV', fgp.CSVLoaderTransformer(r'C:\Users\cbenalcazar\PycharmProjects\BussinesIntelligenceFunctions\DatabasesConsultas\TokensPortal.csv')),
         ('Filter_Per_Date', fgp.FilterPerDate(date_column='fecha_caducidad', start_date='2021-01-01')),
         ('Replace_values_Renovacion', fgp.ReplaceValues('producto', ['No', 'Si'], ['Emisión', 'Renovación'])),
         ('Replace_values_estado', fgp.ReplaceValues('estado_firma', [5, 1], ['Aprobado', 'Emitido'])),
@@ -126,7 +132,8 @@ def FirmasCamundaTokens():
 
     # Create a pipeline
     firmas_camunda_pipeline = Pipeline([
-        ('extract_data', dbm.DataExtractor(database='CAMUNDA', query_path=query_path)),
+        #('extract_data', dbm.DataExtractor(database='CAMUNDA', query_path=query_path)),
+        ('Cargar el CSV', fgp.CSVLoaderTransformer(r'C:\Users\cbenalcazar\PycharmProjects\BussinesIntelligenceFunctions\DatabasesConsultas\TokensCamunda.csv')),
         ('Convertir ID a Object', fgp.DTypeObject(column=['id_tramite'])),
         ('delete_duplicates', fgp.DeleteDuplicateEntries(column='id_tramite')),
         ('Filtrar_Suspendidas_Revocadas', fgp.FilterPerNotListMatchs(match_column='estado_firma', match_list=['Revocado', 'Suspendido'])),
@@ -150,6 +157,8 @@ def DataBaseConcatenationPortalCamunda():
     concatenated_pipelines = Pipeline([
         ('concatenate', fgp.ConcatenatedDataFrames(df1=df_camunda, df2=df_portal, axis=0)),
         ('Filtrar_medio_cam_archivo_only', fgp.FilterPerListMatchs(match_column='mediocam', match_list=['Archivo'])),
+        ('Lipieza Correos Preferenciales', fgp.LimpiezaCorreosPref('correo', 'key')),
+        #('Filtrar_origen_proceso', fgp.FilterPerListMatchs(match_column='origen_proceso', match_list=['Security Data'])),
         ('delete_duplicated_serialfirma', fgp.DeleteDuplicateEntries(column='serial_firma')),
         ('Identificar Maximo Fecha Caducidad', fgp.IdentificarMaxDateGroups('fecha_caducidad', 'key')),
         #('Identificar Minimo Fecha Init Tramite', fgp.IdentificarMinDateGroups('fecha_inicio_tramite', 'key')),
@@ -160,8 +169,7 @@ def DataBaseConcatenationPortalCamunda():
                                                                              'fecha_factura',
                                                                              'fecha_expedicion',
                                                                              'fecha_fact'])),
-        ('Indicar pediodo de Renovacion', fgp.VerificarPeriodoRenovacion('fecha_inicio_tramite', 'fecha_caducidad', 'key')),
-        ('Lipieza Correos Preferenciales', fgp.LimpiezaCorreosPref('correo', 'key')),
+        ('Indicar pediodo de Renovacion', fgp.VerificarPeriodoRenovacion('fecha_inicio_tramite', 'fecha_caducidad', 'key', 'producto', 'vigencia')),
     ])
 
     df_portal_camunda = concatenated_pipelines.fit_transform(None)
@@ -174,7 +182,8 @@ def DataBaseConcatenationPortalCamundaTokens():
 
     concatenated_pipelines = Pipeline([
         ('concatenate', fgp.ConcatenatedDataFrames(df1=df_camunda, df2=df_portal, axis=0)),
-        #('Filtrar_medio_cam_archivo_only', fgp.FilterPerListMatchs(match_column='mediocam', match_list=['Archivo'])),
+        ('Limpieza Correos Preferenciales', fgp.LimpiezaCorreosPref('correo', 'key')),
+        #('Filtrar_origen_proceso', fgp.FilterPerListMatchs(match_column='origen_proceso', match_list=['Security Data'])),
         ('delete_duplicated_serialfirma', fgp.DeleteDuplicateEntries(column='serial_firma')),
         ('Identificar Maximo Fecha Caducidad', fgp.IdentificarMaxDateGroups('fecha_caducidad', 'key')),
         #('Identificar Minimo Fecha Init Tramite', fgp.IdentificarMinDateGroups('fecha_inicio_tramite', 'key')),
@@ -185,13 +194,37 @@ def DataBaseConcatenationPortalCamundaTokens():
                                                                              'fecha_factura',
                                                                              'fecha_expedicion',
                                                                              'fecha_fact'])),
-        ('Indicar pediodo de Renovacion', fgp.VerificarPeriodoRenovacion('fecha_inicio_tramite', 'fecha_caducidad', 'key')),
-        ('Lipieza Correos Preferenciales', fgp.LimpiezaCorreosPref('correo', 'key')),
+        ('Indicar pediodo de Renovacion', fgp.VerificarPeriodoRenovacion('fecha_inicio_tramite', 'fecha_caducidad', 'key', 'producto', 'vigencia')),
+        ('delete_duplicated_idtramite', fgp.DeleteDuplicateEntries(column='id_tramite')),
     ])
 
     df_portal_camunda = concatenated_pipelines.fit_transform(None)
     return df_portal_camunda
 
+
+def DataBaseConcatenationFirmasTokens():
+    df_firmas = DataBaseConcatenationPortalCamundaTokens()
+    df_tokens = DataBaseConcatenationPortalCamunda()
+
+    concatenated_pipelines = Pipeline([
+        ('concatenate', fgp.ConcatenatedDataFrames(df1=df_firmas, df2=df_tokens, axis=0)),
+        ('delete_duplicated_serialfirma', fgp.DeleteDuplicateEntries(column='id_tramite')),
+        ('Convertir Valor Factura a float', fgp.DTypeFloat(['subtotal', 'valorfactura'])),
+        ('Corregir Valor a comisionar', fgp.ValueToComisionar('valorfactura', 'vigencia', 'valor_factura_comision', 'producto')),
+        ('ContadorFirmasComisionar',
+         fgp.ExtractNumerateRows('Mes de Renovacion', 'producto', 'vigencia', 'Mom. de renovacion', 'valor_factura_comision')),
+    ])
+    df_portal_camunda_firmas_tokens = concatenated_pipelines.fit_transform(None)
+    return df_portal_camunda_firmas_tokens
+
+
+def GetReportC0misiones(X):
+
+    comisiones_pipelines = Pipeline([
+        ('Get Reporte Comisiones', fgp.ReportComisiones()),
+    ])
+    df_reporte_comisiones = comisiones_pipelines.fit_transform(X)
+    return df_reporte_comisiones
 
 # Procesos Pendientes del Portal CAMUNDA
 def ProcesosPendientesCamunda():
@@ -226,8 +259,32 @@ def ProcesosPendientesCamunda():
 
 def main():
     print("main")
-    df = DataBaseConcatenationPortalCamundaTokens()
+    df = DataBaseConcatenationFirmasTokens()
     df.info()
+    # Definir el path del archivo
+    directory = r'C:/Users/cbenalcazar/PycharmProjects/BussinesIntelligenceFunctions/DatabasesConsultas'
+    filename = f'Reporte Firmas General.csv'
+    file_path = os.path.join(directory, filename)
+
+    # Verificar si el directorio existe, y si no, crearlo
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+    # Guardar el DataFrame como CSV
+    df.to_csv(file_path, index=False)
+
+    df_reporte_comisiones = GetReportC0misiones(df)
+    # Definir el path del archivo
+    directory = r'C:/Users/cbenalcazar/PycharmProjects/BussinesIntelligenceFunctions/DatabasesConsultas'
+    filename = f'Reporte Comisiones.xlsx'
+    file_path = os.path.join(directory, filename)
+
+    # Verificar si el directorio existe, y si no, crearlo
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+    # Guardar el DataFrame como CSV
+    df_reporte_comisiones.to_excel(file_path, index=False)
 
 
 if __name__ == '__main__':

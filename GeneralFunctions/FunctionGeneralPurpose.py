@@ -1,3 +1,4 @@
+import re
 import time
 from datetime import timedelta
 
@@ -24,11 +25,26 @@ class DeleteDuplicateEntries(BaseEstimator, TransformerMixin):
 
     def transform(self, X=None):
         start_time = time.time()
-        # Drop duplicates in function of null elements in the rows
-        X['nulls_count'] = X.isnull().sum(axis=1)
+
+        # Calcular la cantidad de valores nulos usando NumPy
+        X['nulls_count'] = np.sum(pd.isnull(X).values, axis=1)
+
+        # Ordenar el DataFrame por la columna clave y el conteo de nulos
         X.sort_values(by=[self.column, 'nulls_count'], inplace=True)
-        X.drop_duplicates(subset=[self.column], keep=self.keep_value, inplace=True)
-        X.reset_index(drop=True, inplace=True)
+
+        # Filtrar filas donde self.column no es nulo
+        X_non_null = X.dropna(subset=[self.column])
+
+        # Obtener los índices únicos usando numpy para el valor en self.column
+        _, unique_indices = np.unique(X_non_null[self.column].values, return_index=True)
+        X_non_null_unique = X_non_null.iloc[unique_indices]
+
+        # Filtrar filas donde self.column es nulo
+        X_null = X[X[self.column].isna()]
+
+        # Combinar ambos DataFrames (filas no nulas procesadas + filas nulas originales)
+        X = pd.concat([X_non_null_unique, X_null], ignore_index=True)
+
         print(f"Tiempo de ejecucion DeleteDuplicateEntries {time.time() - start_time}")
         return X
 
@@ -118,16 +134,20 @@ class DTypeFloat(BaseEstimator, TransformerMixin):
     :param column_list: List of Column to be transformed.
     """
 
-    def __init__(self, column):
-        self.column = column
+    def __init__(self, columns):
+        self.columns = columns
 
     def fit(self, X, y=None):
         return self
 
     def transform(self, X=None):
         start_time = time.time()
-        for column in self.column:
-            X[column] = X[column].astype(float)
+        for column in self.columns:
+            # Reemplazar cadenas vacías con NaN para manejar correctamente los valores nulos
+            X[column] = X[column].replace('', np.nan)
+
+            # Convertir la columna a tipo float, ignorando errores de conversión
+            X[column] = pd.to_numeric(X[column], errors='coerce')
         print(f"Tiempo de ejecucion DTypeFloat {time.time() - start_time}")
         return X
 
@@ -415,9 +435,21 @@ class CrearKeyWithCedulaRucTP(BaseEstimator, TransformerMixin):
     def transform(self, X=None):
         start_time = time.time()
         X = X.dropna(subset=[self.tipo_persona_column])
-        X['ruc_copy'] = X[self.ruc_column].copy()
-        X['ruc_copy'] = X['ruc_copy'].fillna(X[self.cedula_column].astype(str) + "001")
+        # Copiar la columna 'ruc' sin que se convierta a float
+        X['ruc_copy'] = X[self.ruc_column].astype(str)
+
+        # Reemplazar NaN por una cadena específica (cedula + "001")
+        X['ruc_copy'] = np.where(X['ruc_copy'].isin(['nan', 'NaN', 'None', '']),
+                                 X[self.cedula_column].astype(str) + "001",
+                                 X['ruc_copy'])
+
+        # Asegurarse de que la columna es de tipo string
+        X['ruc_copy'] = X['ruc_copy'].astype(str)
+
+        X[self.cedula_column] = X[self.cedula_column].astype(str)
+        X[self.tipo_persona_column] = X[self.tipo_persona_column].astype(str)
         X[self.key_name_column] = X[[self.cedula_column, 'ruc_copy', self.tipo_persona_column]].agg(''.join, axis=1)
+        X.info()
         print(f"Tiempo de ejecucion CrearKeyWithCOlumns {time.time() - start_time}")
         return X
 
@@ -539,11 +571,13 @@ class VerificarPeriodoRenovacion(BaseEstimator, TransformerMixin):
     :return: Dataframe with the renewal verified.
     """
 
-    def __init__(self, column_date_init, column_date_expiration, column_key, add_column='status'):
+    def __init__(self, column_date_init, column_date_expiration, column_key, producto, vigencia, add_column='status'):
         self.column_date_init = column_date_init
         self.column_date_expiration = column_date_expiration
         self.column_key = column_key
         self.add_column = add_column
+        self.producto = producto
+        self.vigencia = vigencia
 
     def fit(self, X, y=None):
         return self
@@ -569,6 +603,14 @@ class VerificarPeriodoRenovacion(BaseEstimator, TransformerMixin):
         X['fecha_ini_tram_reno'] = X[self.column_date_init].copy()
         X['fecha_ini_tram_reno'] = X.groupby(self.column_key)['fecha_ini_tram_reno'].shift(-1)
 
+        # Identificar la el origen  de la renovacion
+        X['origen_proceso_reno'] = X['origen_proceso'].copy()
+        X['origen_proceso_reno'] = X.groupby(self.column_key)['origen_proceso_reno'].shift(-1)
+
+        # Identificar la el origen  de la renovacion
+        X['origen_test_delete'] = X['origen_proceso'].copy()
+        X['origen_test_delete'] = X.groupby(self.column_key)['origen_test_delete'].shift(1)
+
         # Fecha de cducidad de la firma previa
         X['fecha_caducidad_previa'] = X[self.column_date_expiration].copy()
         X['fecha_caducidad_previa'] = X.groupby(self.column_key)['fecha_caducidad_previa'].shift(1)
@@ -593,7 +635,6 @@ class VerificarPeriodoRenovacion(BaseEstimator, TransformerMixin):
             (X['fecha_ini_tram_reno'] <= X[self.column_date_expiration] + timedelta(days=30)),
             ((X[self.add_column] == 'No Renovado') & (X['max_fecha_caducidad'] > X['fecha_caducidad'])),
             X['fecha_ini_tram_reno'].notna()
-            # Esta condición cubre todos los casos restantes que no han sido capturados
         ]
 
         choices = [
@@ -606,21 +647,39 @@ class VerificarPeriodoRenovacion(BaseEstimator, TransformerMixin):
         X['Estado Firma Caducada'] = np.select(conditions, choices, default='Firma No Renovada')
         X['Mom. de renovacion'] = X.groupby(self.column_key)['Estado Firma Caducada'].shift(1)
 
-        X['Mes de Renovacion'] = 'Mes de Renovacion'
-        # Suponiendo que 'X' es un DataFrame y 'self.column_date_expiration' es el nombre de la columna con fechas
         condition_mes_reno = [
-            (X['fecha_ini_tram_reno'].isna()),
-            ((X['fecha_ini_tram_reno'].dt.month == X[self.column_date_expiration].dt.month) & (X['fecha_ini_tram_reno'].dt.year == X[self.column_date_expiration].dt.year)),
-            ((X['fecha_ini_tram_reno'].dt.month != X[self.column_date_expiration].dt.month) | (X['fecha_ini_tram_reno'].dt.year != X[self.column_date_expiration].dt.year))
+            X['fecha_ini_tram_reno'].isna(),
+
+            (X['fecha_ini_tram_reno'].dt.month == X[self.column_date_expiration].dt.month) &
+            (X['fecha_ini_tram_reno'].dt.year == X[self.column_date_expiration].dt.year) &
+            (
+                    ((X['origen_proceso_reno'] == 'Security Data') & X['origen_proceso'] == 'Security Data') |
+                    ((X['origen_proceso_reno'].isin(['Terceros', 'Preferenciales', 'Security Data'])) & (
+                            X['origen_proceso'] == 'Security Data'))
+            ) & (X['vigencia'].isin(['1', '2', '3', '4', '5', '6']))
+            #& (X['fecha_aprobacion'].dt.year < X['fecha_ini_tram_reno'].dt.year)
+            #& (X['producto'].isin(['Renovación', 'Emisión']))
+            ,
+
+            ((X['fecha_ini_tram_reno'].dt.month != X[self.column_date_expiration].dt.month) |
+             (X['fecha_ini_tram_reno'].dt.year != X[self.column_date_expiration].dt.year)) &
+            (
+                    ((X['origen_proceso_reno'] == 'Security Data') & X['origen_proceso'] == 'Security Data') |
+                    ((X['origen_proceso_reno'].isin(['Terceros', 'Preferenciales', 'Security Data'])) & (
+                            X['origen_proceso'] == 'Security Data'))
+            ) & (X['vigencia'].isin(['1', '2', '3', '4', '5', '6']))
+            #& (X['fecha_aprobacion'].dt.year < X['fecha_ini_tram_reno'].dt.year)
+            #& (X['producto'].isin(['Renovación', 'Emisión']))
         ]
+
         choices_mes_reno = [
             'No Renueva',
             'Renovo dentro del mismo Mes',
             'Mes de Renovacion'
         ]
-        X['Mes de Renovacion'] = np.select(condition_mes_reno, choices_mes_reno, default='')
-        X['Mes de Renovacion'] = X.groupby(self.column_key)['Mes de Renovacion'].shift(1)
-        #X.loc[(X['Mes de Renovacion'].isna() & X['producto'] == 'Renovación'), 'Mes de Renovacion'] = 'Mes de Renovacion'
+
+        X['Mes de Renovacion Ori'] = np.select(condition_mes_reno, choices_mes_reno, default='')
+        X['Mes de Renovacion'] = X.groupby(self.column_key)['Mes de Renovacion Ori'].shift(1)
 
         print(f"Tiempo de ejecucion VerificarPeriodoRenovacion {time.time() - start_time}")
 
@@ -690,10 +749,6 @@ class LimpiezaCorreosPref(BaseEstimator, TransformerMixin):
             default='Security Data'  # Valor por defecto si ninguna condición es True
         )
 
-        # Identificar la el origen  de la renovacion
-        X['origen_proceso_reno'] = X['origen_proceso'].copy()
-        X['origen_proceso_reno'] = X.groupby(self.column_key)['origen_proceso_reno'].shift(-1)
-
         print(f"Tiempo de ejecucion LimpiezaCorreosPref {time.time() - start_time}")
         return X
 
@@ -713,8 +768,300 @@ class ChangeDateInitTramFact(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X=None):
-        print("Test")
         start_time = time.time()
         X[self.column_date_init] = X[self.column_date_fact].fillna(X[self.column_date_init])
         print(f"Tiempo de ejecucion ChangeDateInitTramFact {time.time() - start_time}")
         return X
+
+
+class ExtractNumerateRows(BaseEstimator, TransformerMixin):
+    def __init__(self, mes_renovacion, producto, vigencia, mom_renovacion, valor_factura):
+        self.mes_renovacion = mes_renovacion
+        self.producto = producto
+        self.vigencia = vigencia
+        self.mom_renovacion = mom_renovacion
+        self.valor_factura = valor_factura
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X=None):
+        start_time = time.time()
+
+        # Extraer mes y año en formato MM/AAAA
+        X['mes_ano_aprob'] = X['fecha_aprobacion'].dt.strftime('%m%Y')
+        X['mes_ano_cadu'] = X['fecha_caducidad'].dt.strftime('%m%Y')
+
+        # Filtrar las filas en función de la condición
+        X_extract = X[
+            X['Mes de Renovacion'].isin(['Renovo dentro del mismo Mes', 'Mes de Renovacion']) &
+            X['medio_contacto'].isin(['Whatsapp', 'Mailing', 'Llamada del operador', 'Medios'])
+        ]
+
+        # Ordenar por mes_ano_aprob y valor_factura en orden ascendente para que las facturas con menor valor sean numeradas primero
+        X_extract.sort_values(by=['mes_ano_aprob', self.valor_factura], ascending=[True, False], inplace=True)
+
+        # Numerar las filas agrupándolas por mes_ano_aprob
+        X.loc[X_extract.index, 'numero_fila'] = X_extract.groupby('mes_ano_aprob').cumcount() + 1
+        '''
+        # Filtrado del DataFrame basado en las condiciones
+        filtro = (
+                X['vigencia'].isin(['1', '2', '3', '4', '5', '6']) &
+                X['medio_contacto'].isin(['Whatsapp', 'Mailing', 'Llamada del Operador', 'Medios']) &
+                X['producto'].isin(['Agregar RUC a Firma', 'Emisión', 'Recuperacion Clave', 'Renovación']) &
+                X['origen_proceso'].isin(['Security Data']) &
+                ~X['Estado Firma Caducada'].isin(['Firma No Renovada, Tiene Firma Vigente'])
+        )
+
+        # Aplicar el filtro de las condiciones previas al DataFrame
+        X_filtrado = X[filtro]
+
+        # Contar la cantidad de firmas caducadas agrupadas por 'mes_ano_aprob'
+        X_filtrado['cantidad_firmas_caducadas'] = X_filtrado.groupby('mes_ano_aprob')[
+            'Estado Firma Caducada'].transform('count')
+
+        # Rellenar valores nulos con 0 en el DataFrame filtrado
+        #X_filtrado['cantidad_firmas_caducadas'].fillna(0, inplace=True)
+
+        # Hacer un merge con el DataFrame original para agregar la nueva columna
+        X = X.merge(X_filtrado[['mes_ano_aprob', 'cantidad_firmas_caducadas']], on='mes_ano_aprob', how='left')
+
+        # Rellenar los valores nulos en la columna 'cantidad_firmas_caducadas' del DataFrame original con 0
+        X['cantidad_firmas_caducadas'].fillna(0, inplace=True)
+        '''
+        X['test_delete1'] = 'hola'
+        X['numero_fila'].fillna('0', inplace=True)
+        X['test_delete'] = 'hola'
+
+        print(f'El tiempo total de la funcionChangeDateInitTramFact es de {time.time() - start_time}')
+        return X
+
+
+class ValueToComisionar(BaseEstimator, TransformerMixin):
+    """
+    Transform the type of a list column to datetime.
+    :param X: Dataframe to be used to transform the type.
+    :param column_list: List of Column to be transformed.
+    """
+
+    def __init__(self, valor_factura, vigencia, valor_factura_comision, renovacion):
+        self.valor_factura = valor_factura
+        self.vigencia = vigencia
+        self.valor_factura_comision = valor_factura_comision
+        self.renovacion = renovacion
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X=None):
+        start_time = time.time()
+        precios_firmas = [
+
+            22.43,  # 1 año - nuevo
+            34.85,  # 2 años - nuevo
+            48.92,  # 3 años - nuevo
+            61.34,  # 4 años - nuevo
+            72.11,  # 5 años - nuevo
+            18.40,  # 1 año - renovación
+            27.60,  # 2 años - renovación
+            39.33,  # 3 años - renovación
+            49.68,  # 4 años - renovación
+            58.65,  # 5 años - renovación
+            23.0,  # 1 ano Renovacion Token
+            35.84,  # 2 anos Renovacion Token,
+            22.40,  # 1 ano Renovacion Token
+            48.3,  # Token 1 Ano
+            64.9,  # Descuento 10 % de Renovacion 5 anos
+            55.21,  # Descuento 10 % de Renovacion 4 anos
+            44.03,  # Descuento 10 % de Renovacion 3 anos
+            31.36,  # Descuento 10 % de Renovacion 2 anos
+            20.18,  # Descuento 10 % de Renovacion 5 anos
+            68.5,  # ONLINE-DESC-SD 5% Online 5 anos
+            58.27,  # ONLINE-DESC-SD 5% 4 anos
+            46.47,  # ONLINE-DESC-SD 5% Online 3 anos
+            33.1,  # ONLINE-DESC-SD Online 2 anos
+            21.30  # ONLINE-DESC-SD Online 1 anos
+
+        ]
+        conditions = [
+            (X[self.valor_factura].isin(precios_firmas)),
+            ((X[self.vigencia] == '1') & (X[self.renovacion].isin(['Renovación']))),
+            ((X[self.vigencia] == '1') & (X[self.renovacion].isin(['Emisión', 'Emision SF']))),
+            ((X[self.vigencia] == '2') & (X[self.renovacion].isin(['Renovación']))),
+            ((X[self.vigencia] == '2') & (X[self.renovacion].isin(['Emisión', 'Emision SF']))),
+            ((X[self.vigencia] == '3') & (X[self.renovacion].isin(['Renovación']))),
+            ((X[self.vigencia] == '3') & (X[self.renovacion].isin(['Emisión', 'Emision SF']))),
+            ((X[self.vigencia] == '4') & (X[self.renovacion].isin(['Renovación']))),
+            ((X[self.vigencia] == '4') & (X[self.renovacion].isin(['Emisión', 'Emision SF']))),
+            ((X[self.vigencia] == '5') & (X[self.renovacion].isin(['Renovación']))),
+            ((X[self.vigencia] == '5') & (X[self.renovacion].isin(['Emisión', 'Emision SF']))),
+            ((X[self.vigencia] == '1M') & (X[self.renovacion].isin(['Emisión', 'Emision SF']))),
+            ((X[self.vigencia] == '1S') & (X[self.renovacion].isin(['Emisión', 'Emision SF'])))
+        ]
+
+        choices = [
+            X[self.valor_factura],  # Si el valor ya está en la lista de precios
+            18.40,  # 1 año - renovación
+            22.43,  # 1 año - nuevo
+            27.60,  # 2 años - renovación
+            34.85,  # 2 años - nuevo
+            39.33,  # 3 años - renovación
+            48.92,  # 3 años - nuevo
+            49.68,  # 4 años - renovación
+            61.34,  # 4 años - nuevo
+            58.65,  # 5 años - renovación
+            72.11,  # 5 años - nuevo
+            12.10,  # 1 mes - nuevo
+            5.15  # 1 semana - nuevo
+        ]
+
+        # Asignar los valores usando np.select
+        X[self.valor_factura_comision] = np.select(conditions, choices, default=None)
+        print(f'El tiempo total de ejecucion de la fucnion ValueToComisionar es de {time.time() - start_time}')
+        return X
+
+
+class CSVLoaderTransformer(BaseEstimator, TransformerMixin):
+    def __init__(self, file_path):
+        self.file_path = file_path
+
+    def fit(self, X=None, y=None):
+        # No necesita ajuste, simplemente devuelve self
+        return self
+
+    def transform(self, X=None):
+        # Definir las columnas que deseas cargar como cadenas de texto
+        columns_to_str = ['ruc', 'cedula', 'vigencia']
+
+        # Cargar el DataFrame desde el archivo CSV, especificando el tipo de datos para las columnas
+        df = pd.read_csv(self.file_path, dtype={col: str for col in columns_to_str})
+
+        # Definir las columnas que deseas convertir a datetime
+        columns_to_check = [
+            'fecha_caducidad', 'fecha_inicio_tramite', 'fecha_fin_tramite',
+            'fecha_aprobacion', 'fecha_factura', 'fecha_expedicion', 'fecha_fact'
+        ]
+
+        # Intentar convertir las columnas a datetime si existen en el DataFrame
+        for column in columns_to_check:
+            if column in df.columns:
+                # Convertir la columna a str primero
+                df[column] = df[column].astype(str)
+
+                # Eliminar todo a partir de un punto incluido el punto mismo
+                df[column] = df[column].apply(lambda x: re.sub(r'\..*', '', x))
+
+                # Luego convertirla a datetime
+                df[column] = pd.to_datetime(df[column], errors='coerce')
+                # Definir las columnas que deseas convertir a datetime
+
+        # Definir las columnas que deseas convertir a datetime
+        columns_to_float = [
+            'valorfactura', 'subtotal'
+        ]
+
+        # Intentar convertir las columnas a datetime si existen en el DataFrame
+        for column in columns_to_float:
+            if column in df.columns:
+                # Reemplazar cualquier cadena vacía o valores que no se puedan convertir con NaN
+                df[column].replace('', pd.NA, inplace=True)
+
+                # Convertir la columna a float, ignorando errores de conversión
+                df[column] = pd.to_numeric(df[column], errors='coerce')
+
+        # Mostrar información sobre el DataFrame después de la transformación
+        df.info()
+
+        return df
+
+class ReportComisiones:
+    def __init__(self):
+        pass
+
+    def fit(self, X=None, y=None):
+        # No necesita ajuste, simplemente devuelve self
+        return self
+
+    def transform(self, X):
+        # Filtrar por 'Mes de Renovacion' y contar por mes/año de 'fecha_aprobacion'
+        X['mes_ano_aprobacion'] = X['fecha_aprobacion'].dt.strftime('%m-%Y')
+        X_aprobados = X[
+            X['Mes de Renovacion'].isin(['Renovo dentro del mismo Mes', 'Mes de Renovacion']) &
+            X['producto'].isin(['Emisión', 'Renovación', 'Emision SF']) &
+            ~X['vigencia'].isin(['1M', '1S', '2S', '3M', '6M']) &
+            X['fecha_aprobacion'].dt.year.isin([2022, 2023, 2024]) &
+            ~X['Mom. de renovacion'].isin(['Firma No Renovada'])
+        ].groupby('mes_ano_aprobacion').size().reset_index(name='cantidad_aprobados')
+
+        # Filtrar por condiciones dadas y contar por mes/año de 'fecha_caducidad'
+        X['mes_ano_caducidad'] = X['fecha_caducidad'].dt.strftime('%m-%Y')
+        filtro = (
+                X['vigencia'].isin(['1', '2', '3', '4', '5', '6']) &
+                X['producto'].isin(['Agregar RUC a Firma', 'Emisión', 'Recuperacion Clave', 'Renovación']) &
+                X['origen_proceso'].isin(['Security Data']) &
+                ~X['Estado Firma Caducada'].isin(['Firma No Renovada, Tiene Firma Vigente'])
+        )
+        X_caducados = X[filtro].groupby('mes_ano_caducidad').size().reset_index(name='cantidad_caducados')
+
+        # Unir ambos resultados y conservar solo aquellos donde mes_ano_aprobacion y mes_ano_caducidad sean iguales
+        resultado = pd.merge(
+            X_aprobados, X_caducados,
+            left_on='mes_ano_aprobacion',
+            right_on='mes_ano_caducidad',
+            how='inner'  # Usamos 'inner' para conservar solo los que coinciden
+        ).rename(columns={'mes_ano_aprobacion': 'mes_ano'})
+
+        # Rellenar valores NaN con 0 en las columnas de conteo
+        resultado['cantidad_aprobados'].fillna(0, inplace=True)
+        resultado['cantidad_caducados'].fillna(0, inplace=True)
+
+        # Eliminar la columna 'mes_ano_caducidad', ya que hemos unificado con 'mes_ano_aprobacion'
+        resultado.drop(columns=['mes_ano_caducidad'], inplace=True)
+
+        return resultado
+
+
+from sklearn.base import TransformerMixin
+import pandas as pd
+
+
+class ColumnTransformer(TransformerMixin):
+    def __init__(self, int_cols=None, float_cols=None, obj_cols=None, datetime_cols=None, cat_cols=None):
+        self.int_cols = int_cols if int_cols is not None else []
+        self.float_cols = float_cols if float_cols is not None else []
+        self.obj_cols = obj_cols if obj_cols is not None else []
+        self.datetime_cols = datetime_cols if datetime_cols is not None else []
+        self.cat_cols = cat_cols if cat_cols is not None else []
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+
+        # Transform integer columns
+        for col in self.int_cols:
+            if col in X.columns:
+                X[col] = pd.to_numeric(X[col], downcast='integer', errors='coerce')
+
+        # Transform float columns
+        for col in self.float_cols:
+            if col in X.columns:
+                X[col] = pd.to_numeric(X[col], downcast='float', errors='coerce')
+
+        # Transform object columns
+        for col in self.obj_cols:
+            if col in X.columns:
+                X[col] = X[col].astype(str)
+
+        # Transform datetime columns
+        for col in self.datetime_cols:
+            if col in X.columns:
+                X[col] = pd.to_datetime(X[col], errors='coerce', format='mixed')
+
+        # Transform categorical columns
+        for col in self.cat_cols:
+            if col in X.columns:
+                X[col] = X[col].astype('category')
+
+        return X
+
