@@ -1,6 +1,7 @@
+import os
 import re
 import time
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 import numpy as np
 import pandas as pd
@@ -8,6 +9,62 @@ from sklearn.base import BaseEstimator, TransformerMixin
 
 
 class DeleteDuplicateEntries(BaseEstimator, TransformerMixin):
+    """
+    Delete duplicate entries in a dataframe in a column
+    :param X: Dataframe to be used to delete the duplicates.
+    :param column: Column to be used to delete the duplicates.
+    :param keep_value: Value to keep in the duplicates.
+    :return: Dataframe without duplicates.
+    """
+
+    def __init__(self, column, nulls_count, keep_value='first'):
+        self.column = column
+        self.nulls_count = nulls_count
+        self.keep_value = keep_value
+
+    def fit(self, X):
+        return self
+
+    def transform(self, X=None):
+        start_time = time.time()
+
+        # Ordenar el DataFrame por la columna clave y el conteo de nulos
+        X.sort_values(by=[self.column, self.nulls_count], inplace=True, ascending=True)
+
+        # Elimina los elementos Duplicados en funcion de la columna manteniendo el primer registro
+        X = X.drop_duplicates(subset=[self.column], keep=self.keep_value)
+        X.reset_index(drop=True, inplace=True)
+
+        print(f"Tiempo de ejecucion DeleteDuplicateEntries {time.time() - start_time}")
+        return X
+
+
+class CountNullValuesRow(BaseEstimator, TransformerMixin):
+    """
+    Delete duplicate entries in a dataframe in a column
+    :param X: Dataframe to be used to delete the duplicates.
+    :param column: Column to be used to delete the duplicates.
+    :param keep_value: Value to keep in the duplicates.
+    :return: Dataframe without duplicates.
+    """
+
+    def __init__(self, new_column_name):
+        self.new_column_name = new_column_name
+
+    def fit(self, X):
+        return self
+
+    def transform(self, X=None):
+        start_time = time.time()
+
+        # Calcular la cantidad de valores nulos usando NumPy
+        X[self.new_column_name] = np.sum(pd.isnull(X).values, axis=1)
+
+        print(f"Tiempo de ejecucion Count Null Rows {time.time() - start_time}")
+        return X
+
+
+class DeleteDuplicateEntriesWithNulls(BaseEstimator, TransformerMixin):
     """
     Delete duplicate entries in a dataframe in a column
     :param X: Dataframe to be used to delete the duplicates.
@@ -30,7 +87,7 @@ class DeleteDuplicateEntries(BaseEstimator, TransformerMixin):
         X['nulls_count'] = np.sum(pd.isnull(X).values, axis=1)
 
         # Ordenar el DataFrame por la columna clave y el conteo de nulos
-        X.sort_values(by=[self.column, 'nulls_count'], inplace=True)
+        X.sort_values(by=[self.column, 'nulls_count'], inplace=True, ascending=True)
 
         # Filtrar filas donde self.column no es nulo
         X_non_null = X.dropna(subset=[self.column])
@@ -279,13 +336,35 @@ class FilterPerDate(BaseEstimator, TransformerMixin):
 
     def transform(self, X=None):
         start_time = time.time()
-        X[self.date_column] = X[self.date_column].fillna(X['fecha_caducidad_mod'])
         if self.end_date is None:
             X = X[(X[self.date_column] >= self.start_date)].reset_index(drop=True)
         else:
             X = X[(X[self.date_column] >= self.start_date) & (X[self.date_column] <= self.end_date)].reset_index(
                 drop=True)
         print(f"Tiempo de ejecucion FilterPerDate {time.time() - start_time}")
+        return X
+
+
+class FillNAValues(BaseEstimator, TransformerMixin):
+    """
+    Fill NA Values in the dataframe with other column values.
+    :param X: Dataframe to be used to filter by date.
+    :param base_column: Column with NA Values that will be fill.
+    :param auxiliar_column: Values column to be used to fill base_column.
+    :return: Dataframe filtered by date.
+    """
+
+    def __init__(self, base_column, auxiliar_column):
+        self.base_column = base_column
+        self.auxiliar_column = auxiliar_column
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X=None):
+        start_time = time.time()
+        X[self.base_column] = X[self.base_column].fillna(X[self.auxiliar_column])
+        print(f"Tiempo de ejecucion Fill NA Values in Column {time.time() - start_time}")
         return X
 
 
@@ -315,7 +394,7 @@ class FilterPerListMatchs(BaseEstimator, TransformerMixin):
 
 class FilterPerNotListMatchs(BaseEstimator, TransformerMixin):
     """
-    Filter the dataframe by a lists Matchs.
+    Filter the dataframe by a lists Matching elements that not be in the list.
     :param X: Dataframe to be used to filter by date.
     :param match_column: Column to be used to filter.
     :param match_list: Listado de Items con los cuales quiero hacer matchs para eliminar
@@ -332,62 +411,8 @@ class FilterPerNotListMatchs(BaseEstimator, TransformerMixin):
     def transform(self, X=None):
         start_time = time.time()
         # Filtrar los elementos que están en match_list
-        X[~X[self.match_column].isin(self.match_list)].reset_index(drop=True)
+        X[~X[self.match_column].isin(self.match_list)].reset_index(drop=True, inplace=True)
         print(f"Tiempo de ejecucion FilterPerNotListMatchs {time.time() - start_time}")
-        return X
-
-
-class ConcatenatedDataFrames(BaseEstimator, TransformerMixin):
-    """
-    Concatenate two dataframes.
-    :param X: Dataframe to be used to concatenate.
-    :param df: Dataframe to be concatenated.
-    :param axis: Axis to be concatenated.
-    :return: Dataframe concatenated.
-    """
-
-    def __init__(self, df1, df2, axis=1):
-        self.df1 = df1
-        self.df2 = df2
-        self.axis = axis
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X=None):
-        print("Concatenar")
-        start_time = time.time()
-        X = pd.concat([self.df1, self.df2], axis=self.axis, ignore_index=True)
-        print(f"Tiempo de ejecucion ConcatenatedDataFrames {time.time() - start_time}")
-        return X
-
-
-class DeterminarFirmasCaducadas(BaseEstimator, TransformerMixin):
-    """
-    Determine the signatures that have expired.
-    :param X: Dataframe to be used to determine the signatures.
-    :param column: Column to be used to determine the signatures.
-    :return: Dataframe with the signatures determined.
-    """
-
-    def __init__(self, column_date, column_estado_firma='estado_firma'):
-        self.column_date = column_date
-        self.column_estado_firma = column_estado_firma
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X=None):
-        start_time = time.time()
-        # Convertir la fecha actual al formato de pandas
-        today = pd.to_datetime('today').normalize()
-
-        #X[self.column_date] = X[self.column_date].str.split(' ').str[0]
-        # Convertir la columna a datetime con formato mixto
-        X[self.column_date] = pd.to_datetime(X[self.column_date], format='mixed')
-        # Aplicar la condición y actualizar la columna 'column_estado_firma'
-        X.loc[X[self.column_date] < today, self.column_estado_firma] = 'Caducado'
-        print(f"Tiempo de ejecucion DeterminarFirmasCaducadas {time.time() - start_time}")
         return X
 
 
@@ -434,6 +459,7 @@ class CrearKeyWithCedulaRucTP(BaseEstimator, TransformerMixin):
 
     def transform(self, X=None):
         start_time = time.time()
+        print('Antes de eliminar tipo_persona_column')
         X = X.dropna(subset=[self.tipo_persona_column])
         # Copiar la columna 'ruc' sin que se convierta a float
         X['ruc_copy'] = X[self.ruc_column].astype(str)
@@ -446,10 +472,8 @@ class CrearKeyWithCedulaRucTP(BaseEstimator, TransformerMixin):
         # Asegurarse de que la columna es de tipo string
         X['ruc_copy'] = X['ruc_copy'].astype(str)
 
-        X[self.cedula_column] = X[self.cedula_column].astype(str)
-        X[self.tipo_persona_column] = X[self.tipo_persona_column].astype(str)
         X[self.key_name_column] = X[[self.cedula_column, 'ruc_copy', self.tipo_persona_column]].agg(''.join, axis=1)
-        X.info()
+        print('Despues de eliminar tipo_persona_column')
         print(f"Tiempo de ejecucion CrearKeyWithCOlumns {time.time() - start_time}")
         return X
 
@@ -561,131 +585,6 @@ class DTypeDateTime(BaseEstimator, TransformerMixin):
         return X
 
 
-class VerificarPeriodoRenovacion(BaseEstimator, TransformerMixin):
-    """
-    Verify if a signature is a renewal.
-    :param X: Dataframe to be used to verify the renewal.
-    :param column_date_init: Column to be used to verify the renewal.
-    :param column_date_expiration: Column name to be added.
-    :param column_key: Column Key to Group Request from the same client
-    :return: Dataframe with the renewal verified.
-    """
-
-    def __init__(self, column_date_init, column_date_expiration, column_key, producto, vigencia, add_column='status'):
-        self.column_date_init = column_date_init
-        self.column_date_expiration = column_date_expiration
-        self.column_key = column_key
-        self.add_column = add_column
-        self.producto = producto
-        self.vigencia = vigencia
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X=None):
-        start_time = time.time()
-        # Ordenar el dataframe por la columna de la fecha de inicio y Fecha de inicio del proceso
-        X.sort_values(by=[self.column_key, self.column_date_init], inplace=True)
-        X.reset_index(drop=True, inplace=True)
-
-        # Agregar la columna de Estatus
-        X[self.add_column] = 'Renovado'
-        df_ultimos = X.groupby(self.column_key, group_keys=False).tail(1)
-        #df_ultimos['valor_especifico'] = 'No Renovados'
-        X.loc[df_ultimos.index, self.add_column] = 'No Renovado'
-
-        # Iterar sobre los registros agrupados por la columna key
-        # Proceso de Revision del periodo de renovacion
-        # En caso de existir un unico registro, o ser el ultimo registro del mismo key, se asume que no se puede
-        # determinar si es una renovacion anticipada o no
-        # Recorremos una posicion posterior todas las filas de fecha de expiracion con la finalidad de poder comparar
-        # la fecha de inicio del siguiente tramite con la fecha de expiracion del tramite actual
-        X['fecha_ini_tram_reno'] = X[self.column_date_init].copy()
-        X['fecha_ini_tram_reno'] = X.groupby(self.column_key)['fecha_ini_tram_reno'].shift(-1)
-
-        # Identificar la el origen  de la renovacion
-        X['origen_proceso_reno'] = X['origen_proceso'].copy()
-        X['origen_proceso_reno'] = X.groupby(self.column_key)['origen_proceso_reno'].shift(-1)
-
-        # Identificar la el origen  de la renovacion
-        X['origen_test_delete'] = X['origen_proceso'].copy()
-        X['origen_test_delete'] = X.groupby(self.column_key)['origen_test_delete'].shift(1)
-
-        # Fecha de cducidad de la firma previa
-        X['fecha_caducidad_previa'] = X[self.column_date_expiration].copy()
-        X['fecha_caducidad_previa'] = X.groupby(self.column_key)['fecha_caducidad_previa'].shift(1)
-        X['fecha_caducidad_previa'] = pd.to_datetime(X['fecha_caducidad_previa'])
-
-        # Identificar Tipo de atencion de la renovacion
-        X['atention_reno'] = X['atencion'].copy()
-        X['atention_reno'] = X.groupby(self.column_key)['atention_reno'].shift(-1)
-
-        # Identificar la Vigencia de la renovacion
-        X['vigencia_reno'] = X['vigencia'].copy()
-        X['vigencia_reno'] = X.groupby(self.column_key)['vigencia_reno'].shift(-1)
-
-        # Calcular la diferencia en días
-        X['diferencia_dias'] = (X['fecha_ini_tram_reno'] - X['fecha_caducidad']).dt.days
-
-        #vigencia_anios = ['1', '2', '3', '4', '5', '6']
-        # Indicar las condiciones de renovacion y los plazos
-        conditions = [
-            (X["fecha_ini_tram_reno"] < X[self.column_date_expiration] - timedelta(days=90)),
-            (X['fecha_ini_tram_reno'] < X[self.column_date_expiration]),
-            (X['fecha_ini_tram_reno'] <= X[self.column_date_expiration] + timedelta(days=30)),
-            ((X[self.add_column] == 'No Renovado') & (X['max_fecha_caducidad'] > X['fecha_caducidad'])),
-            X['fecha_ini_tram_reno'].notna()
-        ]
-
-        choices = [
-            'Duplica Su Firma Vigente',
-            'Firma Ren. Anticipada 90 dias',
-            'Firma Ren. Plazo 30 dias',
-            'Firma No Renovada, Tiene Firma Vigente',
-            'Firma Ren. Fuera Periodo'
-        ]
-        X['Estado Firma Caducada'] = np.select(conditions, choices, default='Firma No Renovada')
-        X['Mom. de renovacion'] = X.groupby(self.column_key)['Estado Firma Caducada'].shift(1)
-
-        condition_mes_reno = [
-            X['fecha_ini_tram_reno'].isna(),
-
-            (X['fecha_ini_tram_reno'].dt.month == X[self.column_date_expiration].dt.month) &
-            (X['fecha_ini_tram_reno'].dt.year == X[self.column_date_expiration].dt.year) &
-            (
-                    ((X['origen_proceso_reno'] == 'Security Data') & X['origen_proceso'] == 'Security Data') |
-                    ((X['origen_proceso_reno'].isin(['Terceros', 'Preferenciales', 'Security Data'])) & (
-                            X['origen_proceso'] == 'Security Data'))
-            ) & (X['vigencia'].isin(['1', '2', '3', '4', '5', '6']))
-            #& (X['fecha_aprobacion'].dt.year < X['fecha_ini_tram_reno'].dt.year)
-            #& (X['producto'].isin(['Renovación', 'Emisión']))
-            ,
-
-            ((X['fecha_ini_tram_reno'].dt.month != X[self.column_date_expiration].dt.month) |
-             (X['fecha_ini_tram_reno'].dt.year != X[self.column_date_expiration].dt.year)) &
-            (
-                    ((X['origen_proceso_reno'] == 'Security Data') & X['origen_proceso'] == 'Security Data') |
-                    ((X['origen_proceso_reno'].isin(['Terceros', 'Preferenciales', 'Security Data'])) & (
-                            X['origen_proceso'] == 'Security Data'))
-            ) & (X['vigencia'].isin(['1', '2', '3', '4', '5', '6']))
-            #& (X['fecha_aprobacion'].dt.year < X['fecha_ini_tram_reno'].dt.year)
-            #& (X['producto'].isin(['Renovación', 'Emisión']))
-        ]
-
-        choices_mes_reno = [
-            'No Renueva',
-            'Renovo dentro del mismo Mes',
-            'Mes de Renovacion'
-        ]
-
-        X['Mes de Renovacion Ori'] = np.select(condition_mes_reno, choices_mes_reno, default='')
-        X['Mes de Renovacion'] = X.groupby(self.column_key)['Mes de Renovacion Ori'].shift(1)
-
-        print(f"Tiempo de ejecucion VerificarPeriodoRenovacion {time.time() - start_time}")
-
-        return X
-
-
 class EmptyMethod(BaseEstimator, TransformerMixin):
     """
     Transform the type of a list column to datetime.
@@ -700,56 +599,6 @@ class EmptyMethod(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X=None):
-        return X
-
-
-class LimpiezaCorreosPref(BaseEstimator, TransformerMixin):
-    """
-    Clean the emails in a column.
-    :param X: Dataframe to be used to clean the emails.
-    :param column: Column to be used to clean the emails.
-    :return: Dataframe with the emails cleaned.
-    """
-
-    def __init__(self, column, column_key):
-        self.column = column
-        self.column_key = column_key
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X=None):
-        start_time = time.time()
-        #X['origen_proceso'] = 'Security Data'
-        # Lista de los correos de los preferenciales
-        df_correos_pref = pd.read_excel(
-            r'E:\Inteligencia de Negocios\13. Renovaciones\INFO PREFERENCIALES.xlsx',
-            sheet_name='Hoja1'
-        )
-        df_correos_pref['CORREOS CLIENTES '].str.strip()
-        set_correos_pref = set(df_correos_pref['CORREOS CLIENTES '])
-        #X.loc[X[self.column].isin(set_correos_pref), 'origen_proceso'] = 'Preferenciales'
-        #X = X[~X[self.column].isin(set_correos_pref)].reset_index(drop=True)
-
-        # Paso 2: Definir las condiciones
-        condition_preferenciales = X[self.column].isin(set_correos_pref)
-        condition_nulos = X['MEMBER_of_operador'].isna()
-        condition_terceros = ~X['MEMBER_of_operador'].str.contains('OPE_SECDATA|OPE_SD', na=False)
-        # Paso 3: Definir las opciones
-        choices = [
-            'Preferenciales',  # Para la primera condición
-            'Security Data',
-            'Terceros'  # Para la segunda condición
-        ]
-
-        # Paso 4: Usar np.select para asignar los valores según las condiciones
-        X['origen_proceso'] = np.select(
-            [condition_preferenciales, condition_nulos, condition_terceros],  # Lista de condiciones
-            choices,  # Lista de valores correspondientes
-            default='Security Data'  # Valor por defecto si ninguna condición es True
-        )
-
-        print(f"Tiempo de ejecucion LimpiezaCorreosPref {time.time() - start_time}")
         return X
 
 
@@ -796,7 +645,7 @@ class ExtractNumerateRows(BaseEstimator, TransformerMixin):
         X_extract = X[
             X['Mes de Renovacion'].isin(['Renovo dentro del mismo Mes', 'Mes de Renovacion']) &
             X['medio_contacto'].isin(['Whatsapp', 'Mailing', 'Llamada del operador', 'Medios'])
-        ]
+            ]
 
         # Ordenar por mes_ano_aprob y valor_factura en orden ascendente para que las facturas con menor valor sean numeradas primero
         X_extract.sort_values(by=['mes_ano_aprob', self.valor_factura], ascending=[True, False], inplace=True)
@@ -939,7 +788,7 @@ class CSVLoaderTransformer(BaseEstimator, TransformerMixin):
         # Definir las columnas que deseas convertir a datetime
         columns_to_check = [
             'fecha_caducidad', 'fecha_inicio_tramite', 'fecha_fin_tramite',
-            'fecha_aprobacion', 'fecha_factura', 'fecha_expedicion', 'fecha_fact'
+            'fecha_aprobacion', 'fecha_factura', 'fecha_expedicion'
         ]
 
         # Intentar convertir las columnas a datetime si existen en el DataFrame
@@ -974,6 +823,7 @@ class CSVLoaderTransformer(BaseEstimator, TransformerMixin):
 
         return df
 
+
 class ReportComisiones:
     def __init__(self):
         pass
@@ -991,7 +841,7 @@ class ReportComisiones:
             ~X['vigencia'].isin(['1M', '1S', '2S', '3M', '6M']) &
             X['fecha_aprobacion'].dt.year.isin([2022, 2023, 2024]) &
             ~X['Mom. de renovacion'].isin(['Firma No Renovada'])
-        ].groupby('mes_ano_aprobacion').size().reset_index(name='cantidad_aprobados')
+            ].groupby('mes_ano_aprobacion').size().reset_index(name='cantidad_aprobados')
 
         # Filtrar por condiciones dadas y contar por mes/año de 'fecha_caducidad'
         X['mes_ano_caducidad'] = X['fecha_caducidad'].dt.strftime('%m-%Y')
@@ -1019,10 +869,6 @@ class ReportComisiones:
         resultado.drop(columns=['mes_ano_caducidad'], inplace=True)
 
         return resultado
-
-
-from sklearn.base import TransformerMixin
-import pandas as pd
 
 
 class ColumnTransformer(TransformerMixin):
@@ -1065,3 +911,42 @@ class ColumnTransformer(TransformerMixin):
 
         return X
 
+
+def save_dataframe_csv(X, directory, filename=None):
+    if filename is None:
+        # Obtener la hora para el nombre del archivo
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'{timestamp}.csv'
+
+    file_path = os.path.join(directory, filename)
+
+    # Verificar si el directorio existe, y si no, crearlo
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+    # Guardar el DataFrame como CSV
+    X.to_csv(file_path, index=False)
+
+
+class SaveDataFrameCSV(BaseEstimator, TransformerMixin):
+    def __init__(self, directory, filename=None):
+        self.directory = directory
+        self.filename = filename
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        if self.filename is None:
+            # Obtener la hora para el nombre del archivo
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            self.filename = f'{timestamp}.csv'
+
+        file_path = os.path.join(self.directory, self.filename)
+
+        # Verificar si el directorio existe, y si no, crearlo
+        if not os.path.exists(self.directory):
+            os.makedirs(self.directory)
+
+        # Guardar el DataFrame como CSV
+        X.to_csv(file_path, index=False)
