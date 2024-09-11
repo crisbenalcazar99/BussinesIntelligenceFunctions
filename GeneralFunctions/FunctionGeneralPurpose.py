@@ -439,6 +439,29 @@ class AgregarColumnaValor(BaseEstimator, TransformerMixin):
         return X
 
 
+class DuplicarColumnaOtroNombre(BaseEstimator, TransformerMixin):
+    """
+    Add a column with a value.
+    :param X: Dataframe to be used to add the column.
+    :param column_name: Column name to be added.
+    :param value: Value to be added.
+    :return: Dataframe with the column added.
+    """
+
+    def __init__(self, column_name, column_name_aux):
+        self.column_name = column_name
+        self.column_name_aux = column_name_aux
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X=None):
+        start_time = time.time()
+        X[self.column_name] = X[self.column_name_aux]
+        print(f"Tiempo de ejecucion AgregarColumnaValor {time.time() - start_time}")
+        return X
+
+
 class CrearKeyWithCedulaRucTP(BaseEstimator, TransformerMixin):
     """
     Create a key with the values of the columns.
@@ -459,7 +482,6 @@ class CrearKeyWithCedulaRucTP(BaseEstimator, TransformerMixin):
 
     def transform(self, X=None):
         start_time = time.time()
-        print('Antes de eliminar tipo_persona_column')
         X = X.dropna(subset=[self.tipo_persona_column])
         # Copiar la columna 'ruc' sin que se convierta a float
         X['ruc_copy'] = X[self.ruc_column].astype(str)
@@ -473,7 +495,6 @@ class CrearKeyWithCedulaRucTP(BaseEstimator, TransformerMixin):
         X['ruc_copy'] = X['ruc_copy'].astype(str)
 
         X[self.key_name_column] = X[[self.cedula_column, 'ruc_copy', self.tipo_persona_column]].agg(''.join, axis=1)
-        print('Despues de eliminar tipo_persona_column')
         print(f"Tiempo de ejecucion CrearKeyWithCOlumns {time.time() - start_time}")
         return X
 
@@ -678,9 +699,8 @@ class ExtractNumerateRows(BaseEstimator, TransformerMixin):
         # Rellenar los valores nulos en la columna 'cantidad_firmas_caducadas' del DataFrame original con 0
         X['cantidad_firmas_caducadas'].fillna(0, inplace=True)
         '''
-        X['test_delete1'] = 'hola'
+
         X['numero_fila'].fillna('0', inplace=True)
-        X['test_delete'] = 'hola'
 
         print(f'El tiempo total de la funcionChangeDateInitTramFact es de {time.time() - start_time}')
         return X

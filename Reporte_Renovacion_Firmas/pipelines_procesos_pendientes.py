@@ -97,8 +97,8 @@ def etl_camunda_database(query_path):
             'fecha_inicio_tramite', 'fecha_fin_tramite', 'fecha_aprobacion',
             'fecha_caducidad', 'fecha_factura'
         ])),
-        ('Filtrar_Suspendidas_Revocadas',
-         fgp.FilterPerNotListMatchs(match_column='estado_firma', match_list=['Revocado', 'Suspendido'])),
+        ('Count the amount of null Values', fgp.CountNullValuesRow('nulls_count')),
+        ('delete_duplicated_serialfirma', fgp.DeleteDuplicateEntries(column='id_tramite', nulls_count='nulls_count')),
     ])
 
     # Ejecutar el pipeline de ETL
@@ -146,7 +146,6 @@ def etl_portal_database(query_path):
         'producto': 'category',  # Producto relacionado (renovación)
         'fecha_expedicion': 'object',  # Fecha de expedición
         'mediocam': 'category',  # Medio de comunicación
-        'fecha_caducidad_mod': 'object',  # Fecha de caducidad modificada
         'razon_social': 'object',  # Razón social (vacío)
         'ruc': 'object',  # RUC del usuario
         'tipofirma': 'category',  # Tipo de firma (fijo: 'PN')
@@ -179,18 +178,17 @@ def etl_portal_database(query_path):
                                  float_columns=float_columns, save_request=True)),
         #('Cargar el CSV', fgp.CSVLoaderTransformer(r'C:\Users\cbenalcazar\PycharmProjects\BussinesIntelligenceFunctions\DatabasesConsultas\FirmasPortal.csv')),
         ('Converte Date DateTime', fgp.DTypeDateTime([
-            'fecha_aprobacion', 'fecha_expedicion', 'fecha_caducidad_mod',
+            'fecha_aprobacion', 'fecha_expedicion',
             'fecha_factura', 'fecha_inicio_tramite', 'fecha_caducidad',
         ])),
-        ('Fill the column values with other column when is NA',
-         fgp.FillNAValues('fecha_caducidad', 'fecha_caducidad_mod')),
-        ('Filter by Expiration Date', fgp.FilterPerDate(date_column='fecha_caducidad', start_date='2021-01-01')),
         ('Replace_values_Renovacion', fgp.ReplaceValues('producto', ['No', 'Si'], ['Emisión', 'Renovación'])),
-        ('Replace_values_estado', fgp.ReplaceValues('estado_firma', ['5', '1'], ['Aprobado', 'Emitido'])),
+        ('Replace_values_estado', fgp.ReplaceValues('estado_firma', [0, 7, 8],
+                                                    ['Solicitud en Revision', 'Solicitud en Revision',
+                                                     'Rechazo Documentos'])),
         ('Replace_values_formapago', fgp.ReplaceValues('forma_pago', ["20", "16", "19"],
                                                        ['Transferencia/Deposito', 'Pago en Linea', "Pago en Linea"])),
+        ('Add Column ', fgp.DuplicarColumnaOtroNombre(column_name='estado_tramite', column_name_aux='estado_firma')),
         ('Change Variable Type to Categoritcal', dtt.DTypeCategorical(['producto', 'estado_firma', 'forma_pago'])),
-        ('Add Column ', fgp.AgregarColumnaValor(column_name='estado_tramite', value='Finalización de Trámite')),
         # Agregada puesto que todos los registros extraidos fueron finalizados
     ])
     ########CAMBIAR EN LOS CALCULOS DE DIA DE RENOVACION POR LA FECHA DE FACTURACION EN LUGAR INCIO TRMAITE
@@ -199,81 +197,35 @@ def etl_portal_database(query_path):
     return extracted_data
 
 
-def database_concat_portal_camunda(query_camunda, query_portal):
-    df_portal = etl_portal_database(query_portal)
-    df_camunda = etl_camunda_database(query_camunda)
+def database_concat_portal_camunda():
+    folder_query = r"C:\Users\cbenalcazar\PycharmProjects\BussinesIntelligenceFunctions\Reporte_Renovacion_Firmas\Consultas SQL"
+    query_camunda_archivo = os.path.join(folder_query, "Solicitudes_Proceso_Camunda.sql")
+    query_portal_archivo = os.path.join(folder_query, "Solicitudes_Proceso_Portal.sql")
+    df_portal = etl_portal_database(query_portal_archivo)
+    df_camunda = etl_camunda_database(query_camunda_archivo)
 
     concatenated_pipelines = Pipeline([
         ('concatenate', sf.ConcatenatedDataFrames(df1=df_camunda, df2=df_portal, axis=0)),
         ('Actualizacion de Date FACT por fecha Init Tramite en campos vacios',
          fgp.FillNAValues('fecha_factura', 'fecha_inicio_tramite')),
-        ('Establecer Firmas Caducadas', sf.DeterminateExpiredSignatures('fecha_caducidad')),
         ('Replace_Guion_Nulls_RUC', fgp.ReplaceValues('ruc', ['-', ''], [np.nan, np.nan])),
         ('Create_Column_key', fgp.CrearKeyWithCedulaRucTP('cedula', 'ruc', 'tipofirma', 'key')),
         ('Define Origen de la Firma', sf.DefineRequestOrigen('MEMBER_of_operador', 'correo')),
         ('Count the amount of null Values', fgp.CountNullValuesRow('nulls_count')),
-        ('delete_duplicated_serialfirma', fgp.DeleteDuplicateEntries(column='serial_firma', nulls_count='nulls_count')),
-        ('Identificar Maximo Fecha Caducidad', fgp.IdentificarMaxDateGroups('fecha_caducidad', 'key')),
-        ('Indicar pediodo de Renovacion',
-         sf.VerificarPeriodoRenovacion('fecha_factura', 'fecha_caducidad', 'key', 'producto', 'vigencia')),
-
     ])
 
     df_portal_camunda = concatenated_pipelines.fit_transform(None)
     return df_portal_camunda
 
 
-def DataBaseConcatenationArchivoTokens():
-    folder_query = r"C:\Users\cbenalcazar\PycharmProjects\BussinesIntelligenceFunctions\Reporte_Renovacion_Firmas\Consultas SQL"
-    query_camunda_tokens = os.path.join(folder_query, "ConsultaCamunda_Tokens.sql")
-    query_portal_tokens = os.path.join(folder_query, "ConsultaPortalSQL_Tokens.sql")
-    query_camunda_archivo = os.path.join(folder_query, "ConsultaCamunda.sql")
-    query_portal_archivo = os.path.join(folder_query, "ConsultaPortalSQL.sql")
-
-    df_firmas = database_concat_portal_camunda(query_camunda=query_camunda_archivo, query_portal=query_portal_archivo)
-    df_tokens = database_concat_portal_camunda(query_camunda=query_camunda_tokens, query_portal=query_portal_tokens)
-
-    concatenated_pipelines = Pipeline([
-        ('concatenate', sf.ConcatenatedDataFrames(df1=df_firmas, df2=df_tokens, axis=0)),
-        ('delete_duplicated_serialfirma', fgp.DeleteDuplicateEntriesWithNulls(column='id_tramite')),
-        ('Corregir Valor a comisionar',
-         fgp.ValueToComisionar('valorfactura', 'vigencia', 'valor_factura_comision', 'producto')),
-        ('ContadorFirmasComisionar',
-         fgp.ExtractNumerateRows('Mes de Renovacion', 'producto', 'vigencia', 'Mom. de renovacion',
-                                 'valor_factura_comision')),
-    ])
-    df_portal_camunda_firmas_tokens = concatenated_pipelines.fit_transform(None)
-    return df_portal_camunda_firmas_tokens
-
-
-def GetReportC0misiones(X):
-    comisiones_pipelines = Pipeline([
-        ('Get Reporte Comisiones', fgp.ReportComisiones()),
-    ])
-    df_reporte_comisiones = comisiones_pipelines.fit_transform(X)
-    return df_reporte_comisiones
-
-
 def main():
     print("main")
-    df = DataBaseConcatenationArchivoTokens()
+    df = database_concat_portal_camunda()
     # Definir el path del archivo
     directory = r'C:/Users/cbenalcazar/PycharmProjects/BussinesIntelligenceFunctions/DatabasesConsultas'
-    filename = f'Reporte Firmas General.csv'
+    filename = f'Procesos Pendientes.csv'
     fgp.save_dataframe_csv(df, directory, filename)
 
-    df_reporte_comisiones = GetReportC0misiones(df)
-    # Definir el path del archivo
-    directory = r'C:/Users/cbenalcazar/PycharmProjects/BussinesIntelligenceFunctions/DatabasesConsultas'
-    filename = f'Reporte Comisiones.xlsx'
-    file_path = os.path.join(directory, filename)
-
-    # Verificar si el directorio existe, y si no, crearlo
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-
-    # Guardar el DataFrame como CSV
-    df_reporte_comisiones.to_excel(file_path, index=False)
 
 
 if __name__ == '__main__':

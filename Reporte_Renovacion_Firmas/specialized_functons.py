@@ -241,6 +241,12 @@ class VerificarPeriodoRenovacion(BaseEstimator, TransformerMixin):
         X['Mes de Renovacion Ori'] = np.select(condition_mes_reno, choices_mes_reno, default='')
         X['Mes de Renovacion'] = X.groupby(self.column_key)['Mes de Renovacion Ori'].shift(1)
 
+        X['fecha_fact_reno'] = X['fecha_factura'].copy()
+        X['fecha_fact_reno'] = X.groupby(self.column_key)['fecha_fact_reno'].shift(-1)
+
+        X['mes_ano_facturacion_reno'] = X['fecha_fact_reno'].dt.strftime('%Y-%m')
+        X['mes_ano_iniciotramite_reno'] = X['fecha_ini_tram_reno'].dt.strftime('%Y-%m')
+
         print(f"Tiempo de ejecucion VerificarPeriodoRenovacion {time.time() - start_time}")
         X.reset_index(inplace=True, drop=True)
 
