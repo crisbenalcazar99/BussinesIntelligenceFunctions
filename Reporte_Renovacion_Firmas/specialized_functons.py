@@ -1,6 +1,7 @@
 from datetime import timedelta, datetime
 
 import numpy as np
+from pandas import to_datetime
 from sklearn.base import BaseEstimator, TransformerMixin
 import pandas as pd
 
@@ -95,18 +96,20 @@ class DefineRequestOrigen(BaseEstimator, TransformerMixin):
         df_correos_pref['CORREOS CLIENTES '].str.strip()
         set_correos_pref = set(df_correos_pref['CORREOS CLIENTES '])
 
-        # Paso 2: Definir las condiciones
         conditions = [
             X[self.column_operator].isna(),
             X[self.column_email].isin(set_correos_pref),
             X[self.column_operator].str.contains('OPE_AGENTE', na=False),
-            ~X[self.column_operator].str.contains('OPE_SECDATA|OPE_SD', na=False)
+            ~X[self.column_operator].str.contains('OPE_SECDATA|OPE_SD', na=False),
+            X['telefono'].str.contains('0983406832', na=False ) # Agregado para la validaicon de un numero de telefono de un tercero
         ]
+        # Paso 2: Definir las condiciones
         # Paso 3: Definir las opciones
         choices = [
             'Security Data',
             'Preferenciales',  # Para la primera condición
             'AGENTE',   # Para la condicion de agentes
+            'Terceros',  # Para la condicion de Terceros
             'Terceros'  # Para la condicion de Terceros
         ]
 
@@ -163,6 +166,9 @@ class VerificarPeriodoRenovacion(BaseEstimator, TransformerMixin):
         X['fecha_ini_tram_reno'] = X[self.column_date_init].copy()
         X['fecha_ini_tram_reno'] = X.groupby(self.column_key)['fecha_ini_tram_reno'].shift(-1)
 
+        X['fecha_aprobacion_reno'] = X['fecha_aprobacion'].copy()
+        X['fecha_aprobacion_reno'] = X.groupby(self.column_key)['fecha_aprobacion_reno'].shift(-1)
+
         # Identificar la el origen  de la renovacion
         X['origen_proceso_reno'] = X['origen_proceso'].copy()
         X['origen_proceso_reno'] = X.groupby(self.column_key)['origen_proceso_reno'].shift(-1)
@@ -193,7 +199,7 @@ class VerificarPeriodoRenovacion(BaseEstimator, TransformerMixin):
             (X["fecha_ini_tram_reno"] < X[self.column_date_expiration] - timedelta(days=90)),
             (X['fecha_ini_tram_reno'] < X[self.column_date_expiration]),
             (X['fecha_ini_tram_reno'] <= X[self.column_date_expiration] + timedelta(days=30)),
-            ((X[self.add_column] == 'No Renovado') & (X['max_fecha_caducidad'] > X['fecha_caducidad'])),
+            ((X[self.add_column] == 'No Renovado') & (X['max_fecha_caducidad'] > X['fecha_caducidad']) & (~X['producto'].isin(['Recuperacion Clave', 'Agregar RUC a Firma']))),
             X['fecha_ini_tram_reno'].notna()
         ]
 
@@ -241,11 +247,27 @@ class VerificarPeriodoRenovacion(BaseEstimator, TransformerMixin):
         X['Mes de Renovacion Ori'] = np.select(condition_mes_reno, choices_mes_reno, default='')
         X['Mes de Renovacion'] = X.groupby(self.column_key)['Mes de Renovacion Ori'].shift(1)
 
-        X['fecha_fact_reno'] = X['fecha_factura'].copy()
-        X['fecha_fact_reno'] = X.groupby(self.column_key)['fecha_fact_reno'].shift(-1)
+        conditions_caducidad_Vale = [
+            X['fecha_caducidad'].isnull(),
+            (
+                (X['fecha_aprobacion_reno'].dt.year == X['fecha_caducidad'].dt.year) & (X['fecha_aprobacion_reno'].dt.month >= X['fecha_caducidad'].dt.month)
+            ) | (
+                (X['fecha_aprobacion_reno'].dt.year > X['fecha_caducidad'].dt.year)
+            ) | (
+                X['Estado Firma Caducada'].isin(['Firma No Renovada'])
+            ),
+            (X['fecha_aprobacion_reno'].dt.year < X['fecha_caducidad'].dt.year) | (
+                    (X['fecha_aprobacion_reno'].dt.year == X['fecha_caducidad'].dt.year) & (X['fecha_aprobacion_reno'].dt.month < X['fecha_caducidad'].dt.month)
+            )
+        ]
 
-        X['mes_ano_facturacion_reno'] = X['fecha_fact_reno'].dt.strftime('%Y-%m')
-        X['mes_ano_iniciotramite_reno'] = X['fecha_ini_tram_reno'].dt.strftime('%Y-%m')
+        choices_Vale_condition = [
+            'Fecha Caducidad no definida',
+            'Caducada',
+            'No Caducada'
+        ]
+
+        X['condition_Vale_python'] = np.select(conditions_caducidad_Vale, choices_Vale_condition, default='Sin definir')
 
         print(f"Tiempo de ejecucion VerificarPeriodoRenovacion {time.time() - start_time}")
         X.reset_index(inplace=True, drop=True)

@@ -592,8 +592,9 @@ class DTypeDateTime(BaseEstimator, TransformerMixin):
     :param column_list: List of Column to be transformed.
     """
 
-    def __init__(self, columns):
+    def __init__(self, columns, flag_camunda):
         self.columns = columns
+        self.flag_camunda = flag_camunda
 
     def fit(self, X, y=None):
         return self
@@ -601,8 +602,59 @@ class DTypeDateTime(BaseEstimator, TransformerMixin):
     def transform(self, X=None):
         start_time = time.time()
         for column in self.columns:
-            X[column] = pd.to_datetime(X[column], format='mixed', errors='coerce')
+            if self.flag_camunda and column in ['fecha_aprobacion', 'fecha_caducidad']:
+                X[column] = pd.to_datetime(X[column], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+            else:
+                X[column] = pd.to_datetime(X[column], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+            #X[column] = pd.to_datetime(X[column], format='mixed', errors='coerce')
         print(f"Tiempo de ejecucion DTypeDateTime {time.time() - start_time}")
+        return X
+
+
+class FillFechaCaducidadNAVAlues(BaseEstimator, TransformerMixin):
+    """
+       Transform the type of a list column to datetime.
+       :param X: Dataframe to be used to transform the type.
+       :param column_list: List of Column to be transformed.
+       """
+
+    def __init__(self, fecha_caducidad, vigencia, fecha_aprobacion):
+        self.fecha_caducidad = fecha_caducidad
+        self.vigencia = vigencia
+        self.fecha_aprobacion = fecha_aprobacion
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X=None):
+        print(X[self.vigencia].unique())
+        conditions = [
+            (X[self.vigencia] == '1S') & (X[self.fecha_caducidad].isnull()),
+            (X[self.vigencia] == '1M') & (X[self.fecha_caducidad].isnull()),
+            (X[self.vigencia] == '1') & (X[self.fecha_caducidad].isnull()),
+            (X[self.vigencia] == '2') & (X[self.fecha_caducidad].isnull()),
+            (X[self.vigencia] == '2S') & (X[self.fecha_caducidad].isnull()),
+            (X[self.vigencia] == '3') & (X[self.fecha_caducidad].isnull()),
+            (X[self.vigencia] == '4') & (X[self.fecha_caducidad].isnull()),
+            (X[self.vigencia] == '5') & (X[self.fecha_caducidad].isnull()),
+        ]
+
+        actions = [
+            X[self.fecha_aprobacion] + timedelta(weeks=1),
+            X[self.fecha_aprobacion] + timedelta(days=30),
+            X[self.fecha_aprobacion] + timedelta(days=365),
+            X[self.fecha_aprobacion] + timedelta(days=730),
+            X[self.fecha_aprobacion] + timedelta(weeks=2),
+            X[self.fecha_aprobacion] + timedelta(days=1095),
+            X[self.fecha_aprobacion] + timedelta(days=1460),
+            X[self.fecha_aprobacion] + timedelta(days=1825),
+        ]
+
+        X[self.fecha_caducidad] = np.select(conditions, actions, default=X[self.fecha_caducidad])
+        X[self.fecha_caducidad] = pd.to_datetime(X[self.fecha_caducidad])
+        print('Modificacion de las fechas de caducidad FillFechaCaducidadNAVAlues')
+        X.info()
+
         return X
 
 
@@ -664,7 +716,8 @@ class ExtractNumerateRows(BaseEstimator, TransformerMixin):
 
         # Filtrar las filas en función de la condición
         X_extract = X[
-            X['Mes de Renovacion'].isin(['Renovo dentro del mismo Mes', 'Mes de Renovacion']) &
+            X['Mes de Renovacion'].isin(['Renovo dentro del mismo Mes',
+                                         'Mes de Renovacion']) &  # Anadir la clausula de Firma caducada antes del inciio del mes
             X['medio_contacto'].isin(['Whatsapp', 'Mailing', 'Llamada del operador', 'Medios'])
             ]
 
@@ -725,7 +778,6 @@ class ValueToComisionar(BaseEstimator, TransformerMixin):
     def transform(self, X=None):
         start_time = time.time()
         precios_firmas = [
-
             22.43,  # 1 año - nuevo
             34.85,  # 2 años - nuevo
             48.92,  # 3 años - nuevo
@@ -750,10 +802,9 @@ class ValueToComisionar(BaseEstimator, TransformerMixin):
             46.47,  # ONLINE-DESC-SD 5% Online 3 anos
             33.1,  # ONLINE-DESC-SD Online 2 anos
             21.30  # ONLINE-DESC-SD Online 1 anos
-
         ]
         conditions = [
-            (X[self.valor_factura].isin(precios_firmas)),
+            (X[self.valor_factura].isin(precios_firmas)),  # Validar cual de los 2 valores es inferior
             ((X[self.vigencia] == '1') & (X[self.renovacion].isin(['Renovación']))),
             ((X[self.vigencia] == '1') & (X[self.renovacion].isin(['Emisión', 'Emision SF']))),
             ((X[self.vigencia] == '2') & (X[self.renovacion].isin(['Renovación']))),
@@ -859,8 +910,9 @@ class ReportComisiones:
             X['Mes de Renovacion'].isin(['Renovo dentro del mismo Mes', 'Mes de Renovacion']) &
             X['producto'].isin(['Emisión', 'Renovación', 'Emision SF']) &
             ~X['vigencia'].isin(['1M', '1S', '2S', '3M', '6M']) &
-            X['fecha_aprobacion'].dt.year.isin([2022, 2023, 2024]) &
-            ~X['Mom. de renovacion'].isin(['Firma No Renovada'])
+            #X['fecha_aprobacion'].dt.year.isin([2022, 2023, 2024]) &
+            ~X['Mom. de renovacion'].isin(['Firma No Renovada'])  #&
+            #X['condition_Vale_python'].isin(['Caducada'])
             ].groupby('mes_ano_aprobacion').size().reset_index(name='cantidad_aprobados')
 
         # Filtrar por condiciones dadas y contar por mes/año de 'fecha_caducidad'
@@ -869,7 +921,8 @@ class ReportComisiones:
                 X['vigencia'].isin(['1', '2', '3', '4', '5', '6']) &
                 X['producto'].isin(['Agregar RUC a Firma', 'Emisión', 'Recuperacion Clave', 'Renovación']) &
                 X['origen_proceso'].isin(['Security Data']) &
-                ~X['Estado Firma Caducada'].isin(['Firma No Renovada, Tiene Firma Vigente'])
+                ~X['Estado Firma Caducada'].isin(['Firma No Renovada, Tiene Firma Vigente']) &
+                X['condition_Vale_python'].isin(['Caducada'])
         )
         X_caducados = X[filtro].groupby('mes_ano_caducidad').size().reset_index(name='cantidad_caducados')
 
@@ -922,7 +975,11 @@ class ColumnTransformer(TransformerMixin):
         # Transform datetime columns
         for col in self.datetime_cols:
             if col in X.columns:
-                X[col] = pd.to_datetime(X[col], errors='coerce', format='mixed')
+                if self.flag_camunda and column in ['fecha_aprobacion', 'fecha_caducidad']:
+                    X[column] = pd.to_datetime(X[column], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+                else:
+                    X[column] = pd.to_datetime(X[column], format='%Y-%m-%d %H:%M:%S.%f', errors='coerce')
+                #X[col] = pd.to_datetime(X[col], errors='coerce', format='mixed')
 
         # Transform categorical columns
         for col in self.cat_cols:

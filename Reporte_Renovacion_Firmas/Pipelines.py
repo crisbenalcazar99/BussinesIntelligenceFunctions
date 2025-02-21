@@ -91,12 +91,13 @@ def etl_camunda_database(query_path):
     firmas_camunda_pipeline = Pipeline([
         ('extract_data',
          dbm.DataExtractorCamunda(database='CAMUNDA', query_path=query_path, dtypes_variables=column_types,
-                                  save_request=True, float_columns=float_columns)),
+                                  save_request=False, float_columns=float_columns)),
         #('Cargar el CSV', fgp.CSVLoaderTransformer(r'C:\Users\cbenalcazar\PycharmProjects\BussinesIntelligenceFunctions\DatabasesConsultas\FirmasCamunda.csv')),
         ('Converte Date DateTime', fgp.DTypeDateTime([
             'fecha_inicio_tramite', 'fecha_fin_tramite', 'fecha_aprobacion',
             'fecha_caducidad', 'fecha_factura'
-        ])),
+        ], True)),
+        ('Fecha Caducidad MOD', fgp.FillFechaCaducidadNAVAlues('fecha_caducidad', 'vigencia', 'fecha_aprobacion')),
         ('Filtrar_Suspendidas_Revocadas',
          fgp.FilterPerNotListMatchs(match_column='estado_firma', match_list=['Revocado', 'Suspendido'])),
     ])
@@ -139,7 +140,7 @@ def etl_portal_database(query_path):
 
     column_types = {
         'cedula': 'object',  # Cédula del usuario
-        'vigencia': 'category',  # Tiempo de vigencia (puede incluir valores con 'M')
+        'vigencia': 'object',  # Tiempo de vigencia (puede incluir valores con 'M')
         'fecha_aprobacion': 'object',  # Fecha de aprobación
         'factura': 'object',  # Número de factura
         'forma_pago': 'category',  # Forma de pago
@@ -176,12 +177,13 @@ def etl_portal_database(query_path):
     firmas_portal_pipeline = Pipeline([
         ('extract_data',
          dbm.DataExtractorPortal(database='Portal', query_path=query_path, dtypes_variables=column_types,
-                                 float_columns=float_columns, save_request=True)),
+                                 float_columns=float_columns, save_request=False)),
         #('Cargar el CSV', fgp.CSVLoaderTransformer(r'C:\Users\cbenalcazar\PycharmProjects\BussinesIntelligenceFunctions\DatabasesConsultas\FirmasPortal.csv')),
         ('Converte Date DateTime', fgp.DTypeDateTime([
             'fecha_aprobacion', 'fecha_expedicion', 'fecha_caducidad_mod',
             'fecha_factura', 'fecha_inicio_tramite', 'fecha_caducidad',
-        ])),
+        ], False)),
+        ('Fecha Caducidad MOD', fgp.FillFechaCaducidadNAVAlues('fecha_caducidad', 'vigencia', 'fecha_aprobacion')),
         ('Fill the column values with other column when is NA',
          fgp.FillNAValues('fecha_caducidad', 'fecha_caducidad_mod')),
         ('Filter by Expiration Date', fgp.FilterPerDate(date_column='fecha_caducidad', start_date='2021-01-01')),
@@ -235,12 +237,15 @@ def DataBaseConcatenationArchivoTokens():
 
     concatenated_pipelines = Pipeline([
         ('concatenate', sf.ConcatenatedDataFrames(df1=df_firmas, df2=df_tokens, axis=0)),
-        ('delete_duplicated_serialfirma', fgp.DeleteDuplicateEntriesWithNulls(column='id_tramite')),
+        ('delete_duplicated_idTramite', fgp.DeleteDuplicateEntriesWithNulls(column='id_tramite')),
+        ('delete_duplicated_serialfirma', fgp.DeleteDuplicateEntries(column='serial_firma', nulls_count='nulls_count')), # Anadido 12/17/2024 Eliminacion duplciados TOkens
         ('Corregir Valor a comisionar',
          fgp.ValueToComisionar('valorfactura', 'vigencia', 'valor_factura_comision', 'producto')),
         ('ContadorFirmasComisionar',
          fgp.ExtractNumerateRows('Mes de Renovacion', 'producto', 'vigencia', 'Mom. de renovacion',
                                  'valor_factura_comision')),
+
+
     ])
     df_portal_camunda_firmas_tokens = concatenated_pipelines.fit_transform(None)
     return df_portal_camunda_firmas_tokens

@@ -96,7 +96,7 @@ def etl_camunda_database(query_path):
         ('Converte Date DateTime', fgp.DTypeDateTime([
             'fecha_inicio_tramite', 'fecha_fin_tramite', 'fecha_aprobacion',
             'fecha_caducidad', 'fecha_factura'
-        ])),
+        ], True)),
         ('Count the amount of null Values', fgp.CountNullValuesRow('nulls_count')),
         ('delete_duplicated_serialfirma', fgp.DeleteDuplicateEntries(column='id_tramite', nulls_count='nulls_count')),
     ])
@@ -180,7 +180,7 @@ def etl_portal_database(query_path):
         ('Converte Date DateTime', fgp.DTypeDateTime([
             'fecha_aprobacion', 'fecha_expedicion',
             'fecha_factura', 'fecha_inicio_tramite', 'fecha_caducidad',
-        ])),
+        ], False)),
         ('Replace_values_Renovacion', fgp.ReplaceValues('producto', ['No', 'Si'], ['Emisión', 'Renovación'])),
         ('Replace_values_estado', fgp.ReplaceValues('estado_firma', [0, 7, 8],
                                                     ['Solicitud en Revision', 'Solicitud en Revision',
@@ -216,6 +216,9 @@ def database_concat_portal_camunda():
 
     df_portal_camunda = concatenated_pipelines.fit_transform(None)
     return df_portal_camunda
+
+
+
 
 
 def main():
